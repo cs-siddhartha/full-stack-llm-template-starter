@@ -1,0 +1,17 @@
+{
+  "name": "full-stack-template",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "prepare": "husky",
+    "test": "npm run test:backend && npm run check:frontend",
+    "test:backend": "uv run --directory backend python -m pytest",
+    "check:frontend": "npm --prefix frontend run lint && npm --prefix frontend run typecheck",
+    "commitlint": "commitlint --edit"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.5.3",
+    "@commitlint/config-conventional": "^20.5.3",
+    "husky": "^9.1.7"
+  }
+}
