@@ -1,33 +1,30 @@
 from hashlib import sha256
 from typing import Protocol
 
-from app.core.config import Settings
-from app.models.generation import (
-    GenerationCreate,
-    GenerationRead,
-    GenerationUsage,
-)
+from app.generation.models import GenerationCreate, GenerationRead, GenerationUsage
 
 
 class GenerationService(Protocol):
-    """Keep API code independent from any specific LLM SDK or provider."""
+    """Isolate HTTP behavior from provider SDKs and provider-specific responses."""
 
-    async def generate(self, request: GenerationCreate) -> GenerationRead:
-        """Create one provider-neutral text generation from validated input."""
-        ...
+    provider: str
+    model: str
+
+    async def generate(self, request: GenerationCreate) -> GenerationRead: ...
 
 
 class DemoGenerationService:
-    """Provide keyless, deterministic output for local full-stack development."""
+    """Give local development deterministic output without provider credentials."""
+
+    provider = "demo"
 
     def __init__(self, model: str) -> None:
-        self._model = model
+        self.model = model
 
     async def generate(self, request: GenerationCreate) -> GenerationRead:
-        """Produce repeatable placeholder text while preserving a real async seam."""
         canonical_request = request.model_dump_json(exclude_none=True)
         generation_hash = sha256(
-            f"{self._model}:{canonical_request}".encode()
+            f"{self.model}:{canonical_request}".encode()
         ).hexdigest()[:16]
 
         compact_prompt = " ".join(request.prompt.split())
@@ -42,19 +39,11 @@ class DemoGenerationService:
 
         return GenerationRead(
             id=f"gen_demo_{generation_hash}",
-            provider="demo",
-            model=self._model,
+            provider=self.provider,
+            model=self.model,
             output=output,
             usage=GenerationUsage(
                 input_characters=input_characters,
                 output_characters=len(output),
             ),
         )
-
-
-def build_generation_service(settings: Settings) -> GenerationService:
-    """Select the configured provider behind a single replaceable factory."""
-    if settings.llm_provider == "demo":
-        return DemoGenerationService(model=settings.llm_model)
-
-    raise ValueError(f"Unsupported LLM provider: {settings.llm_provider}")

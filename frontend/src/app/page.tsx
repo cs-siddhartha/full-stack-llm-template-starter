@@ -1,6 +1,6 @@
 import { BackendConfigCard } from "@/components/backend-config-card";
 import { BackendStatusCard } from "@/components/backend-status-card";
-import { PromptForm } from "@/components/prompt-form";
+import { GenerationForm } from "@/features/generation/generation-form";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -12,7 +12,6 @@ import {
 
 export const dynamic = "force-dynamic";
 
-/** Composes a static shell around independently streamed backend panels. */
 export default function Home() {
   return (
     <main className="min-h-svh bg-muted/30">
@@ -58,7 +57,7 @@ export default function Home() {
               replace with your preferred LLM SDK.
             </p>
           </div>
-          <PromptForm />
+          <GenerationForm />
         </section>
 
         <section aria-labelledby="architecture-heading" className="space-y-5">

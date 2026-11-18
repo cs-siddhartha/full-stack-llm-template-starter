@@ -1,10 +1,32 @@
+from dataclasses import dataclass, field
+
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
-from app.core.config import Settings
-from app.core.rate_limit import InMemoryFixedWindowRateLimiter
+from app.config import Settings
+from app.generation.models import GenerationCreate, GenerationRead, GenerationUsage
+from app.generation.rate_limit import InMemoryFixedWindowRateLimiter
 from app.main import create_app
+
+
+@dataclass
+class RecordingGenerationService:
+    """Expose received requests so route tests can stay provider-independent."""
+
+    provider: str = "recording"
+    model: str = "recording-v1"
+    requests: list[GenerationCreate] = field(default_factory=list)
+
+    async def generate(self, request: GenerationCreate) -> GenerationRead:
+        self.requests.append(request)
+        return GenerationRead(
+            id="gen_recorded",
+            provider=self.provider,
+            model=self.model,
+            output="Recorded response",
+            usage=GenerationUsage(input_characters=7, output_characters=17),
+        )
 
 
 def test_health_returns_readiness_metadata(client: TestClient) -> None:
@@ -67,49 +89,62 @@ def test_protected_routes_reject_incorrect_auth(
     assert response.headers["www-authenticate"] == "Basic"
 
 
-def test_config_returns_only_safe_capabilities(
-    client: TestClient,
+def test_config_describes_injected_runtime(
+    settings: Settings,
     auth: tuple[str, str],
 ) -> None:
-    response = client.get("/api/v1/config", auth=auth)
+    service = RecordingGenerationService(provider="custom", model="custom-v2")
+    limiter = InMemoryFixedWindowRateLimiter(limit=2, window_seconds=15)
+
+    with TestClient(
+        create_app(
+            settings=settings,
+            generation_service=service,
+            generation_rate_limiter=limiter,
+        )
+    ) as client:
+        response = client.get("/api/v1/config", auth=auth)
 
     assert response.status_code == status.HTTP_200_OK
     assert response.json() == {
-        "service": "Test LLM API",
-        "version": "9.9.9",
-        "environment": "test",
-        "api_base_path": "/api/v1",
-        "generation_provider": "demo",
-        "generation_model": "demo-v1",
-        "rate_limit_requests": 10,
-        "rate_limit_window_seconds": 60,
+        "generation_provider": "custom",
+        "generation_model": "custom-v2",
+        "rate_limit_requests": 2,
+        "rate_limit_window_seconds": 15,
     }
 
 
-def test_generation_is_deterministic_and_provider_neutral(
-    client: TestClient,
+def test_generation_validates_and_delegates_to_provider(
+    settings: Settings,
     auth: tuple[str, str],
 ) -> None:
+    service = RecordingGenerationService()
     payload = {
-        "prompt": "Explain retrieval augmented generation.",
-        "instructions": "Keep it concise.",
+        "prompt": "  Explain retrieval augmented generation.  ",
+        "instructions": "  Keep it concise.  ",
         "temperature": 0.3,
     }
 
-    first_response = client.post("/api/v1/generations", json=payload, auth=auth)
-    second_response = client.post("/api/v1/generations", json=payload, auth=auth)
+    with TestClient(
+        create_app(settings=settings, generation_service=service)
+    ) as client:
+        response = client.post("/api/v1/generations", json=payload, auth=auth)
 
-    assert first_response.status_code == status.HTTP_201_CREATED
-    assert first_response.json() == second_response.json()
-    body = first_response.json()
-    assert body["id"].startswith("gen_demo_")
-    assert body["object"] == "generation"
-    assert body["provider"] == "demo"
-    assert body["model"] == "demo-v1"
-    assert payload["prompt"] in body["output"]
-    expected_input_characters = len(payload["prompt"]) + len(payload["instructions"])
-    assert body["usage"]["input_characters"] == expected_input_characters
-    assert body["usage"]["output_characters"] == len(body["output"])
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.json() == {
+        "id": "gen_recorded",
+        "provider": "recording",
+        "model": "recording-v1",
+        "output": "Recorded response",
+        "usage": {"input_characters": 7, "output_characters": 17},
+    }
+    assert service.requests == [
+        GenerationCreate(
+            prompt="Explain retrieval augmented generation.",
+            instructions="Keep it concise.",
+            temperature=0.3,
+        )
+    ]
 
 
 def test_generation_rejects_blank_prompts(
@@ -137,6 +172,31 @@ def test_generation_rejects_unknown_fields(
     )
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+def test_invalid_generation_does_not_consume_rate_limit_capacity(
+    settings: Settings,
+    auth: tuple[str, str],
+) -> None:
+    limiter = InMemoryFixedWindowRateLimiter(limit=1, window_seconds=60)
+
+    with TestClient(
+        create_app(settings=settings, generation_rate_limiter=limiter)
+    ) as client:
+        invalid = client.post(
+            "/api/v1/generations",
+            json={"prompt": "   "},
+            auth=auth,
+        )
+        valid = client.post(
+            "/api/v1/generations",
+            json={"prompt": "Valid"},
+            auth=auth,
+        )
+
+    assert invalid.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert valid.status_code == status.HTTP_201_CREATED
+    assert valid.headers["x-ratelimit-remaining"] == "0"
 
 
 def test_generation_rate_limit_headers_and_window_reset(
@@ -192,18 +252,3 @@ def test_generation_rate_limit_headers_and_window_reset(
         assert after_reset.status_code == status.HTTP_201_CREATED
         assert after_reset.headers["x-ratelimit-remaining"] == "1"
         assert after_reset.headers["x-ratelimit-reset"] == "120"
-
-
-def test_cors_preflight_allows_configured_frontend(client: TestClient) -> None:
-    response = client.options(
-        "/api/v1/generations",
-        headers={
-            "Origin": "http://localhost:3000",
-            "Access-Control-Request-Method": "POST",
-            "Access-Control-Request-Headers": "content-type",
-        },
-    )
-
-    assert response.status_code == status.HTTP_200_OK
-    assert response.headers["access-control-allow-origin"] == ("http://localhost:3000")
-    assert response.headers["access-control-allow-credentials"] == "true"

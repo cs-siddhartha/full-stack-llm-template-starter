@@ -5,7 +5,6 @@ export type BasicCredentials = {
   password: string;
 };
 
-/** Restricts credentials to the portable character set accepted by both app tiers. */
 function isPrintableAscii(value: string): boolean {
   return (
     value.length > 0 &&
@@ -16,25 +15,14 @@ function isPrintableAscii(value: string): boolean {
   );
 }
 
-/** Loads explicit server-only credentials and fails closed on invalid configuration. */
-export function getConfiguredBasicCredentials(): BasicCredentials | null {
-  const username = process.env.BASIC_AUTH_USERNAME;
-  const password = process.env.BASIC_AUTH_PASSWORD;
-
-  if (
-    !username ||
-    !password ||
-    username.includes(":") ||
-    !isPrintableAscii(username) ||
-    !isPrintableAscii(password)
-  ) {
-    return null;
-  }
-
-  return { username, password };
+export function credentialsArePortable(credentials: BasicCredentials): boolean {
+  return (
+    !credentials.username.includes(":") &&
+    isPrintableAscii(credentials.username) &&
+    isPrintableAscii(credentials.password)
+  );
 }
 
-/** Parses the HTTP Basic payload without accepting another authorization scheme. */
 function parseBasicAuthorization(
   authorization: string | null,
 ): BasicCredentials | null {
@@ -61,20 +49,18 @@ function parseBasicAuthorization(
   };
 }
 
-/** Hashes variable-length secrets before comparing fixed-size buffers in constant time. */
 function secretsMatch(actual: string, expected: string): boolean {
   const actualDigest = createHash("sha256").update(actual, "utf8").digest();
   const expectedDigest = createHash("sha256").update(expected, "utf8").digest();
   return timingSafeEqual(actualDigest, expectedDigest);
 }
 
-/** Verifies both credential fields even when one comparison has already failed. */
 export function verifyBasicAuthorization(
   authorization: string | null,
-  expected: BasicCredentials | null = getConfiguredBasicCredentials(),
+  expected: BasicCredentials,
 ): boolean {
   const supplied = parseBasicAuthorization(authorization);
-  if (!supplied || !expected) {
+  if (!supplied) {
     return false;
   }
 

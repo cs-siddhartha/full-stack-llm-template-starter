@@ -3,7 +3,7 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.config import Settings
+from app.config import Settings
 from app.main import create_app
 
 
@@ -14,7 +14,6 @@ def settings() -> Settings:
         app_name="Test LLM API",
         app_version="9.9.9",
         environment="test",
-        cors_origins=["http://localhost:3000"],
         basic_auth_username="test-user",
         basic_auth_password="test-password",
         rate_limit_requests=10,
@@ -29,5 +28,8 @@ def client(settings: Settings) -> Iterator[TestClient]:
 
 
 @pytest.fixture
-def auth() -> tuple[str, str]:
-    return ("test-user", "test-password")
+def auth(settings: Settings) -> tuple[str, str]:
+    return (
+        settings.basic_auth_username,
+        settings.basic_auth_password.get_secret_value(),
+    )

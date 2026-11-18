@@ -1,0 +1,10 @@
+{
+  "credentials": [
+    { "username": "test-user", "password": "test-password", "portable": true },
+    { "username": "", "password": "password", "portable": false },
+    { "username": "user:name", "password": "password", "portable": false },
+    { "username": "tést", "password": "password", "portable": false },
+    { "username": "user", "password": "pässword", "portable": false },
+    { "username": "user", "password": "line\nbreak", "portable": false }
+  ]
+}

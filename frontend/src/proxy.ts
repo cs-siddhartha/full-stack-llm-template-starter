@@ -1,13 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import {
-  getConfiguredBasicCredentials,
-  verifyBasicAuthorization,
-} from "@/lib/basic-auth";
+import { verifyBasicAuthorization } from "@/lib/basic-auth";
+import { getConfiguredBasicCredentials } from "@/lib/server-config";
 
 const AUTHENTICATE_HEADER = 'Basic realm="LLM Starter"';
 
-/** Challenges unauthorized page and Server Action requests before application code runs. */
 export function proxy(request: NextRequest) {
   const credentials = getConfiguredBasicCredentials();
   if (!credentials) {

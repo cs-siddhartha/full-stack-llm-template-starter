@@ -1,7 +1,6 @@
 import { Skeleton } from "@/components/ui/skeleton";
 
-/** Holds each data region steady with the same number of rows it will render. */
-export function BackendDetailsSkeleton({ rowCount = 3 }: { rowCount?: number }) {
+export function BackendDetailsSkeleton() {
   return (
     <div
       aria-busy="true"
@@ -9,7 +8,7 @@ export function BackendDetailsSkeleton({ rowCount = 3 }: { rowCount?: number }) 
       className="grid min-h-28 gap-3"
     >
       <Skeleton className="h-5 w-20 rounded-full" />
-      {Array.from({ length: rowCount }, (_, index) => (
+      {Array.from({ length: 3 }, (_, index) => (
         <Skeleton
           className="h-4"
           key={index}

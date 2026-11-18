@@ -1,11 +1,20 @@
+import json
+import tomllib
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import Settings
+from app.config import Settings
+
+_AUTH_VECTORS = json.loads(
+    (
+        Path(__file__).resolve().parents[2] / "contracts/basic-auth-vectors.json"
+    ).read_text(encoding="utf-8")
+)["credentials"]
 
 
 def build_settings(**overrides: object) -> Settings:
-    """Supply valid test credentials while isolating each settings assertion."""
     values: dict[str, object] = {
         "basic_auth_username": "test-user",
         "basic_auth_password": "test-password",
@@ -14,46 +23,14 @@ def build_settings(**overrides: object) -> Settings:
     return Settings(_env_file=None, **values)
 
 
-def test_settings_parse_comma_separated_cors_origins() -> None:
-    settings = build_settings(
-        cors_origins="http://localhost:3000,https://app.example.com",
-    )
+def test_default_app_version_matches_project_metadata() -> None:
+    project = tomllib.loads(
+        (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+    )["project"]
 
-    assert settings.cors_origins == [
-        "http://localhost:3000",
-        "https://app.example.com",
-    ]
-
-
-def test_settings_parse_json_cors_origins() -> None:
-    settings = build_settings(
-        cors_origins='["http://localhost:3000", "https://app.example.com"]',
-    )
-
-    assert settings.cors_origins == [
-        "http://localhost:3000",
-        "https://app.example.com",
-    ]
-
-
-def test_settings_reject_credentialed_wildcard_cors() -> None:
-    with pytest.raises(ValidationError, match="CORS_ALLOW_CREDENTIALS"):
-        build_settings(cors_origins="*")
-
-
-def test_settings_allow_wildcard_without_credentials() -> None:
-    settings = build_settings(
-        cors_origins="*",
-        cors_allow_credentials=False,
-    )
-
-    assert settings.cors_origins == ["*"]
-
-
-def test_settings_normalize_api_prefix() -> None:
-    settings = build_settings(api_v1_prefix="custom/v1/")
-
-    assert settings.api_v1_prefix == "/custom/v1"
+    assert build_settings().app_version == project["version"]
 
 
 @pytest.mark.parametrize(
@@ -109,22 +86,18 @@ def test_settings_require_explicit_basic_credentials(
         Settings(_env_file=None)
 
 
-@pytest.mark.parametrize(
-    ("field", "value", "message"),
-    [
-        ("basic_auth_username", "user:name", "must not contain"),
-        ("basic_auth_username", "t\u00e9st", "printable ASCII"),
-        ("basic_auth_password", "p\u00e4ss", "printable ASCII"),
-        ("basic_auth_password", "line\nbreak", "printable ASCII"),
-    ],
-)
-def test_settings_reject_incompatible_basic_credentials(
-    field: str,
-    value: str,
-    message: str,
-) -> None:
-    with pytest.raises(ValidationError, match=message):
-        build_settings(**{field: value})
+@pytest.mark.parametrize("vector", _AUTH_VECTORS)
+def test_basic_credentials_follow_shared_contract(vector: dict[str, object]) -> None:
+    values = {
+        "basic_auth_username": vector["username"],
+        "basic_auth_password": vector["password"],
+    }
+    if vector["portable"]:
+        settings = Settings(_env_file=None, **values)
+        assert settings.basic_auth_username == vector["username"]
+    else:
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, **values)
 
 
 def test_settings_hide_invalid_password_from_validation_errors() -> None:

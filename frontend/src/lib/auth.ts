@@ -3,12 +3,17 @@ import "server-only";
 import { headers } from "next/headers";
 
 import { verifyBasicAuthorization } from "@/lib/basic-auth";
+import { getConfiguredBasicCredentials } from "@/lib/server-config";
 
-/** Revalidates auth at the data boundary and returns the header needed by FastAPI. */
 export async function requireBasicAuthorization(): Promise<string> {
   const authorization = (await headers()).get("authorization");
+  const credentials = getConfiguredBasicCredentials();
 
-  if (!authorization || !verifyBasicAuthorization(authorization)) {
+  if (
+    !authorization ||
+    !credentials ||
+    !verifyBasicAuthorization(authorization, credentials)
+  ) {
     throw new Error("HTTP Basic authentication is required.");
   }
 

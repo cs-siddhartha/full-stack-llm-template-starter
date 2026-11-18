@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 
 import { BackendDetailsSkeleton } from "@/components/backend-card-skeleton";
+import { BackendPanelError } from "@/components/backend-panel-error";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -10,25 +11,17 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { getBackendHealth } from "@/lib/backend";
-import type { HealthResponse } from "@/lib/backend-types";
+import { BackendRequestError } from "@/lib/backend-error";
 
-/** Fetches only the dynamic readiness rows rendered inside the card boundary. */
 async function BackendStatusDetails() {
-  let health: HealthResponse | null = null;
-
+  let health: Awaited<ReturnType<typeof getBackendHealth>>;
   try {
     health = await getBackendHealth();
-  } catch {
-    health = null;
-  }
-
-  if (!health) {
-    return (
-      <div className="grid min-h-28 content-start gap-3 text-sm text-muted-foreground">
-        <Badge variant="destructive">Offline</Badge>
-        <p>Start the backend on port 8000, then refresh this page.</p>
-      </div>
-    );
+  } catch (error) {
+    if (error instanceof BackendRequestError) {
+      return <BackendPanelError error={error} />;
+    }
+    throw error;
   }
 
   return (
@@ -52,7 +45,6 @@ async function BackendStatusDetails() {
   );
 }
 
-/** Renders the static card shell immediately and suspends only live readiness data. */
 export function BackendStatusCard() {
   return (
     <Card className="min-h-56">

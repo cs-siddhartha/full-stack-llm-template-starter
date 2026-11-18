@@ -8,7 +8,6 @@ export const metadata: Metadata = {
   description: "A reusable server-first Next.js starter for LLM applications.",
 };
 
-/** Provides the shared document shell and global styles for every route. */
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="en">

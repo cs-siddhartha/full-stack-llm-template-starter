@@ -2,48 +2,69 @@
 
 ```mermaid
 flowchart LR
-    user[User / Browser]
+    browser[User / Browser]
 
     subgraph frontend[Next.js frontend]
         proxy[HTTP Basic proxy]
-        ui[Server Components and UI]
+        rsc[Server Components]
         action[Generation Server Action]
-        client[Server-only backend client]
+        client[Server-only API client]
 
-        proxy --> ui
-        ui --> action
-        ui --> client
+        proxy --> rsc
+        proxy --> action
+        rsc --> client
         action --> client
     end
 
     subgraph backend[FastAPI backend]
-        api[Versioned JSON API<br/>/api/v1]
-        auth[HTTP Basic authentication]
-        validation[Pydantic validation]
-        limiter[Per-user fixed-window<br/>rate limiter]
-        service[GenerationService protocol]
-        provider[Deterministic demo provider<br/>or production LLM adapter]
+        router[Versioned API router<br/>/api/v1]
+        health[Health endpoint]
+        config_auth[HTTP Basic authentication]
+        generation_auth[HTTP Basic authentication]
+        config[Runtime capabilities]
+        validation[Pydantic request validation]
+        limiter[Credential-scoped rate limiter]
+        service[GenerationService]
+        provider[Demo or production provider]
 
-        api --> auth
-        auth --> validation
+        router -->|GET /health| health
+        router -->|GET /config| config_auth
+        config_auth --> config
+        router -->|POST /generations| generation_auth
+        generation_auth --> validation
         validation --> limiter
         limiter --> service
         service --> provider
     end
 
-    user -->|HTTPS request with Basic Auth| proxy
-    client -->|Server-to-server HTTP<br/>Authorization forwarded| api
-    provider -->|Provider-neutral generation response| client
-    client -->|Rendered metadata or action result| ui
+    browser -->|HTTPS + Basic Auth| proxy
+    client -->|Server-to-server HTTP<br/>Authorization forwarded| router
+    provider -->|Provider-neutral response| client
 
-    config[Server-only environment<br/>backend URL, credentials, timeouts]
-    config -.-> proxy
-    config -.-> client
-    config -.-> api
+    frontend_env[Frontend server environment]
+    backend_env[Backend environment]
+    frontend_env -.-> proxy
+    frontend_env -.-> client
+    backend_env -.-> config_auth
+    backend_env -.-> generation_auth
+    backend_env -.-> service
 ```
 
-The browser never calls FastAPI directly. Next.js revalidates the incoming Basic
-Auth header at protected server boundaries and forwards it through the private
-backend client. FastAPI authenticates protected routes, validates requests, and
-rate-limits generation calls before invoking the configured provider. The health
-endpoint is public; configuration and generation endpoints require authentication.
+The browser never calls FastAPI directly. Next.js revalidates authentication
+inside protected server operations rather than relying on the proxy alone. The
+backend is therefore private and does not carry browser CORS configuration.
+
+```mermaid
+flowchart LR
+    models[Pydantic request/response models]
+    schema[openapi.json]
+    types[Generated TypeScript contract]
+    client[Next.js API client]
+
+    models -->|FastAPI OpenAPI| schema
+    schema -->|openapi-typescript| types
+    types --> client
+```
+
+FastAPI owns the wire contract. The committed schema and generated TypeScript
+make cross-language changes explicit and are checked by the test suite.

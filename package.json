@@ -1,17 +1,24 @@
 {
   "name": "full-stack-template",
-  "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "frontend"
+  ],
   "scripts": {
     "prepare": "husky",
-    "test": "npm run test:backend && npm run check:frontend",
+    "test": "npm run test:backend && npm run check:api && npm run check:frontend",
     "test:backend": "uv run --directory backend python -m pytest",
-    "check:frontend": "npm --prefix frontend run lint && npm --prefix frontend run typecheck",
+    "export:api-schema": "uv run --directory backend python -m scripts.export_openapi ../openapi.json",
+    "generate:api": "npm run export:api-schema && openapi-typescript openapi.json --default-non-nullable false -o frontend/src/lib/api.generated.ts && node scripts/generate-api-constraints.mjs",
+    "check:api": "openapi-typescript openapi.json --default-non-nullable false --check -o frontend/src/lib/api.generated.ts && node scripts/generate-api-constraints.mjs --check",
+    "check:frontend": "npm --workspace frontend run test && npm --workspace frontend run lint && npm --workspace frontend run typecheck",
+    "build:frontend": "npm --workspace frontend run build",
     "commitlint": "commitlint --edit"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.5.3",
     "@commitlint/config-conventional": "^20.5.3",
-    "husky": "^9.1.7"
+    "husky": "^9.1.7",
+    "openapi-typescript": "^7.13.0"
   }
 }

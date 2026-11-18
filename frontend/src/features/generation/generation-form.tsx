@@ -2,7 +2,10 @@
 
 import { useActionState } from "react";
 
-import { generateText } from "@/app/actions";
+import { generateText } from "@/features/generation/action";
+import { generationFormFields } from "@/features/generation/form-data";
+import { initialGenerationState } from "@/features/generation/types";
+import { generationConstraints } from "@/lib/api-constraints.generated";
 import {
   Alert,
   AlertDescription,
@@ -18,10 +21,8 @@ import {
 } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { initialGenerationState } from "@/lib/backend-types";
 
-/** Keeps the interactive surface small while delegating API communication to a Server Action. */
-export function PromptForm() {
+export function GenerationForm() {
   const [state, formAction, isPending] = useActionState(
     generateText,
     initialGenerationState,
@@ -38,12 +39,12 @@ export function PromptForm() {
       <CardContent>
         <form action={formAction} className="grid gap-5">
           <div className="grid gap-2">
-            <Label htmlFor="prompt">Prompt</Label>
+            <Label htmlFor={generationFormFields.prompt}>Prompt</Label>
             <Textarea
-              id="prompt"
-              name="prompt"
-              minLength={1}
-              maxLength={4_000}
+              id={generationFormFields.prompt}
+              name={generationFormFields.prompt}
+              maxLength={generationConstraints.promptMaxLength}
+              minLength={generationConstraints.promptMinLength}
               placeholder="Explain retrieval-augmented generation in plain language."
               required
               rows={5}
@@ -51,11 +52,13 @@ export function PromptForm() {
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="instructions">Instructions (optional)</Label>
+            <Label htmlFor={generationFormFields.instructions}>
+              Instructions (optional)
+            </Label>
             <Textarea
-              id="instructions"
-              name="instructions"
-              maxLength={2_000}
+              id={generationFormFields.instructions}
+              name={generationFormFields.instructions}
+              maxLength={generationConstraints.instructionsMaxLength}
               placeholder="Keep the answer concise and practical."
               rows={3}
             />
