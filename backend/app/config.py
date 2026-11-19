@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     app_version: str = Field(default_factory=_project_version)
     environment: Literal["development", "test", "production"] = "development"
     debug: bool = False
+    database_url: str = "postgresql+asyncpg://starter:starter@127.0.0.1:5433/starter"
+    database_url_unpooled: str | None = None
     redis_url: str = "redis://127.0.0.1:6379/0"
     redis_namespace: str = Field(default="full-stack-starter", min_length=1)
     demo_login_enabled: bool = True

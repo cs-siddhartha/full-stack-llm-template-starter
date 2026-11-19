@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from redis.asyncio import Redis
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.auth.email import (
     ResendVerificationEmailSender,
@@ -10,11 +12,12 @@ from app.auth.email import (
     VerificationEmailSender,
 )
 from app.auth.service import AuthService, RedisSessionStore, SessionStore
-from app.auth.users import RedisUserStore, UserStore
-from app.auth.verification import RedisVerificationStore, VerificationStore
+from app.auth.users import PostgresUserStore, UserStore
+from app.auth.verification import PostgresVerificationStore, VerificationStore
 from app.cache import CacheStore, RedisCache
 from app.config import Settings, get_settings
 from app.context import ApplicationContext
+from app.database import create_database_engine, create_session_factory
 from app.generation.service import DemoGenerationService, GenerationService
 from app.rate_limit import RateLimiter, RateLimitPolicy, RedisRateLimiter
 from app.router import api_router
@@ -30,6 +33,7 @@ def create_app(
     cache: CacheStore | None = None,
     rate_limiter: RateLimiter | None = None,
     redis_client: Redis | None = None,
+    database_engine: AsyncEngine | None = None,
 ) -> FastAPI:
     resolved_settings = settings if settings is not None else get_settings()
     resolved_service = (
@@ -37,13 +41,7 @@ def create_app(
         if generation_service is not None
         else DemoGenerationService(model=resolved_settings.llm_model)
     )
-    needs_redis = (
-        session_store is None
-        or user_store is None
-        or verification_store is None
-        or cache is None
-        or rate_limiter is None
-    )
+    needs_redis = session_store is None or cache is None or rate_limiter is None
     client = redis_client
     owns_redis_client = needs_redis and client is None
     if needs_redis and client is None:
@@ -52,15 +50,18 @@ def create_app(
     if session_store is None:
         assert client is not None
         session_store = RedisSessionStore(client, resolved_settings.redis_namespace)
-    if user_store is None:
-        assert client is not None
-        user_store = RedisUserStore(client, resolved_settings.redis_namespace)
-    if verification_store is None:
-        assert client is not None
-        verification_store = RedisVerificationStore(
-            client,
-            resolved_settings.redis_namespace,
-        )
+    needs_database = user_store is None or verification_store is None
+    engine = database_engine
+    owns_database_engine = needs_database and engine is None
+    if needs_database and engine is None:
+        engine = create_database_engine(resolved_settings.database_url)
+    if needs_database:
+        assert engine is not None
+        database_sessions = create_session_factory(engine)
+        if user_store is None:
+            user_store = PostgresUserStore(database_sessions)
+        if verification_store is None:
+            verification_store = PostgresVerificationStore(database_sessions)
     if email_sender is None:
         resend_key = resolved_settings.resend_api_key
         email_sender = (
@@ -104,10 +105,17 @@ def create_app(
         if owns_redis_client:
             assert client is not None
             await client.ping()
+        if owns_database_engine:
+            assert engine is not None
+            async with engine.connect() as connection:
+                await connection.execute(text("SELECT 1"))
         yield
         if owns_redis_client:
             assert client is not None
             await client.aclose()
+        if owns_database_engine:
+            assert engine is not None
+            await engine.dispose()
 
     application = FastAPI(
         title=resolved_settings.app_name,

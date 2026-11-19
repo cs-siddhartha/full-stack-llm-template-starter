@@ -1,8 +1,12 @@
 import hashlib
 import secrets
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from redis.asyncio import Redis
+from sqlalchemy import delete
+
+from app.auth.tables import EmailVerificationRow
+from app.database import DatabaseSessionFactory
 
 
 class VerificationStore(Protocol):
@@ -13,27 +17,49 @@ class VerificationStore(Protocol):
     async def revoke(self, token: str) -> None: ...
 
 
-class RedisVerificationStore:
-    """Store short-lived email verification tokens as SHA-256 digests."""
+class PostgresVerificationStore:
+    """Persist short-lived email verification token digests in PostgreSQL."""
 
-    def __init__(self, client: Redis, namespace: str) -> None:
-        self._client = client
-        self._prefix = f"{namespace}:email-verification:"
+    def __init__(self, sessions: DatabaseSessionFactory) -> None:
+        self._sessions = sessions
 
-    def _key(self, token: str) -> str:
-        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
-        return f"{self._prefix}{digest}"
+    @staticmethod
+    def _digest(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
     async def create(self, email: str, ttl_seconds: int) -> str:
         token = secrets.token_urlsafe(32)
-        await self._client.set(self._key(token), email, ex=ttl_seconds)
+        row = EmailVerificationRow(
+            token_digest=self._digest(token),
+            email=email,
+            expires_at=datetime.now(UTC) + timedelta(seconds=ttl_seconds),
+        )
+        async with self._sessions.begin() as session:
+            session.add(row)
         return token
 
     async def consume(self, token: str) -> str | None:
-        return await self._client.getdel(self._key(token))
+        statement = (
+            delete(EmailVerificationRow)
+            .where(EmailVerificationRow.token_digest == self._digest(token))
+            .returning(
+                EmailVerificationRow.email,
+                EmailVerificationRow.expires_at,
+            )
+        )
+        async with self._sessions.begin() as session:
+            result = (await session.execute(statement)).one_or_none()
+        if result is None or result.expires_at <= datetime.now(UTC):
+            return None
+        return str(result.email)
 
     async def revoke(self, token: str) -> None:
-        await self._client.delete(self._key(token))
+        async with self._sessions.begin() as session:
+            await session.execute(
+                delete(EmailVerificationRow).where(
+                    EmailVerificationRow.token_digest == self._digest(token)
+                )
+            )
 
 
 class InMemoryVerificationStore:

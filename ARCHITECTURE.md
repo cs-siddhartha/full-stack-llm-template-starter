@@ -39,8 +39,11 @@ flowchart LR
         service --> provider
     end
 
-    subgraph redis[Redis]
+    subgraph postgres[PostgreSQL]
         users[Users and verification tokens]
+    end
+
+    subgraph redis[Redis]
         sessions[Opaque sessions]
         counters[Atomic rate counters]
         entries[Namespaced cache entries]

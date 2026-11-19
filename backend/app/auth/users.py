@@ -1,9 +1,11 @@
-import hashlib
 from typing import Protocol
 
-from redis.asyncio import Redis
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 
 from app.auth.models import StoredUser
+from app.auth.tables import UserRow
+from app.database import DatabaseSessionFactory
 
 
 class UserStore(Protocol):
@@ -16,39 +18,56 @@ class UserStore(Protocol):
     async def delete(self, email: str) -> None: ...
 
 
-class RedisUserStore:
-    """Persist registered users in Redis while keeping email addresses out of keys."""
+class PostgresUserStore:
+    """Persist registered identities and password hashes in PostgreSQL."""
 
-    def __init__(self, client: Redis, namespace: str) -> None:
-        self._client = client
-        self._prefix = f"{namespace}:user:"
-
-    def _key(self, email: str) -> str:
-        digest = hashlib.sha256(email.encode("utf-8")).hexdigest()
-        return f"{self._prefix}{digest}"
+    def __init__(self, sessions: DatabaseSessionFactory) -> None:
+        self._sessions = sessions
 
     async def create(self, user: StoredUser) -> bool:
-        created = await self._client.set(
-            self._key(user.email),
-            user.model_dump_json(),
-            nx=True,
+        row = UserRow(
+            user_id=user.user_id,
+            email=user.email,
+            password_hash=user.password_hash,
+            email_verified=user.email_verified,
+            created_at=user.created_at,
         )
-        return bool(created)
+        async with self._sessions() as session:
+            session.add(row)
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                return False
+        return True
 
     async def get_by_email(self, email: str) -> StoredUser | None:
-        value = await self._client.get(self._key(email))
-        return None if value is None else StoredUser.model_validate_json(value)
+        async with self._sessions() as session:
+            row = await session.scalar(select(UserRow).where(UserRow.email == email))
+        return None if row is None else self._to_model(row)
 
     async def mark_verified(self, email: str) -> StoredUser | None:
-        user = await self.get_by_email(email)
-        if user is None:
-            return None
-        verified = user.model_copy(update={"email_verified": True})
-        await self._client.set(self._key(email), verified.model_dump_json())
-        return verified
+        async with self._sessions() as session:
+            row = await session.scalar(select(UserRow).where(UserRow.email == email))
+            if row is None:
+                return None
+            row.email_verified = True
+            await session.commit()
+            return self._to_model(row)
 
     async def delete(self, email: str) -> None:
-        await self._client.delete(self._key(email))
+        async with self._sessions.begin() as session:
+            await session.execute(delete(UserRow).where(UserRow.email == email))
+
+    @staticmethod
+    def _to_model(row: UserRow) -> StoredUser:
+        return StoredUser(
+            user_id=row.user_id,
+            email=row.email,
+            password_hash=row.password_hash,
+            email_verified=row.email_verified,
+            created_at=row.created_at,
+        )
 
 
 class InMemoryUserStore:

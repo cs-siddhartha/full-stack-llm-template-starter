@@ -2,8 +2,8 @@
 
 This repository contains a Next.js frontend and a FastAPI backend for text
 generation. Next.js owns the browser boundary. FastAPI owns request validation,
-authentication, Redis sessions, caching, rate-limit policy, and the
-provider-neutral API contract.
+authentication, PostgreSQL persistence, Redis sessions, caching, rate-limit
+policy, and the provider-neutral API contract.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for component and request-flow diagrams.
 
@@ -28,7 +28,8 @@ Prepare each application environment and install the backend dependencies:
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env.local
 uv sync --directory backend
-docker compose up -d redis
+npm run infra:up
+npm run db:migrate
 ```
 
 Run the applications in separate terminals:
@@ -81,10 +82,15 @@ The generation request accepts `prompt`, optional `instructions`, and optional
 `X-RateLimit-Remaining`, and `X-RateLimit-Reset`; exhausted windows return `429`
 with `Retry-After`.
 
-Registered users are stored in Redis with scrypt password hashes. Verification
+Registered users are stored in PostgreSQL with scrypt password hashes. Verification
 tokens are stored as SHA-256 digests, expire after one hour by default, and are
-consumed once. Resend delivers the confirmation link back through the FastAPI
-verification endpoint.
+consumed once. Both records are durable PostgreSQL data. Resend delivers the
+confirmation link back through the FastAPI verification endpoint.
+
+Redis stores only opaque sessions, rate-limit counters, cached GET responses,
+and cache keys managed by the protected flush endpoint. PostgreSQL stores
+durable application data. For hosted PostgreSQL, use a pooled `DATABASE_URL`
+for the application and a direct `DATABASE_URL_UNPOOLED` for Alembic migrations.
 
 FastAPI is the contract source. `openapi.json`,
 `frontend/src/lib/api.generated.ts`, and
