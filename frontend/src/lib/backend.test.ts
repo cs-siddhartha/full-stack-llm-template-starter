@@ -6,6 +6,7 @@ vi.mock("./server-config", () => ({
     url: "https://backend.example.com",
     readTimeoutMs: 5000,
     generationTimeoutMs: 60000,
+    sessionCookieName: "starter_session",
   }),
 }));
 
@@ -13,6 +14,9 @@ import {
   createGeneration,
   getBackendHealth,
   getPublicConfig,
+  loginDemoBackend,
+  loginBackend,
+  signupBackend,
 } from "./backend";
 import { BackendRequestError } from "./backend-error";
 
@@ -51,7 +55,7 @@ describe("backend reads", () => {
     );
   });
 
-  it("forwards authorization to the generated config path", async () => {
+  it("uses the generated config path", async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({
         generation_provider: "demo",
@@ -61,14 +65,14 @@ describe("backend reads", () => {
       }),
     );
 
-    await getPublicConfig("Basic credential");
+    await getPublicConfig("session-token");
 
     const [, init] = fetchMock.mock.calls[0];
     expect(fetchMock.mock.calls[0][0]).toBe(
       "https://backend.example.com/api/v1/config",
     );
-    expect(new Headers(init?.headers).get("Authorization")).toBe(
-      "Basic credential",
+    expect(new Headers(init?.headers).get("Cookie")).toBe(
+      "starter_session=session-token",
     );
   });
 });
@@ -89,7 +93,7 @@ describe("generation requests", () => {
     );
 
     await expect(
-      createGeneration({ prompt: "Hello" }, "Basic credential"),
+      createGeneration({ prompt: "Hello" }, "session-token"),
     ).resolves.toMatchObject({ id: "gen_test", output: "Hello" });
 
     const [url, init] = fetchMock.mock.calls[0];
@@ -97,7 +101,7 @@ describe("generation requests", () => {
     expect(init?.method).toBe("POST");
     expect(init?.body).toBe(JSON.stringify({ prompt: "Hello" }));
     const headers = new Headers(init?.headers);
-    expect(headers.get("Authorization")).toBe("Basic credential");
+    expect(headers.get("Cookie")).toBe("starter_session=session-token");
     expect(headers.get("Content-Type")).toBe("application/json");
   });
 
@@ -109,10 +113,9 @@ describe("generation requests", () => {
       ),
     );
 
-    const error = await createGeneration(
-      { prompt: "Hello" },
-      "Basic credential",
-    ).catch((caught: unknown) => caught);
+    const error = await createGeneration({ prompt: "Hello" }, "session-token").catch(
+      (caught: unknown) => caught,
+    );
 
     expect(error).toBeInstanceOf(BackendRequestError);
     expect(error).toMatchObject({
@@ -162,7 +165,7 @@ describe("backend failures", () => {
 
   it.each([
     {
-      request: () => getPublicConfig("Basic credential"),
+      request: () => getPublicConfig("session-token"),
       payload: {
         generation_provider: "demo",
         generation_model: "demo-v1",
@@ -171,7 +174,7 @@ describe("backend failures", () => {
       },
     },
     {
-      request: () => createGeneration({ prompt: "Hello" }, "Basic credential"),
+      request: () => createGeneration({ prompt: "Hello" }, "session-token"),
       payload: {
         id: "gen_test",
         provider: "demo",
@@ -187,5 +190,63 @@ describe("backend failures", () => {
     fetchMock.mockResolvedValue(jsonResponse(payload));
 
     await expect(request()).rejects.toMatchObject({ code: "invalid-response" });
+  });
+
+  it("extracts the opaque session cookie from login", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        { user_id: "env:local", username: "local", role: "admin" },
+        {
+          headers: {
+            "Set-Cookie":
+              "starter_session=opaque-token; HttpOnly; Max-Age=86400; Path=/; SameSite=lax",
+          },
+        },
+      ),
+    );
+
+    await expect(
+      loginBackend({ username: "local", password: "local-development-only" }),
+    ).resolves.toMatchObject({ token: "opaque-token", maxAge: 86400 });
+  });
+
+  it("creates a demo session without sending credentials", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        { user_id: "demo:local", username: "demo", role: "demo" },
+        {
+          headers: {
+            "Set-Cookie":
+              "starter_session=demo-token; HttpOnly; Max-Age=86400; Path=/; SameSite=lax",
+          },
+        },
+      ),
+    );
+
+    await expect(loginDemoBackend()).resolves.toMatchObject({ token: "demo-token" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://backend.example.com/api/v1/auth/demo",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("submits a registration for email confirmation", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        { message: "Check your email to confirm your account" },
+        { status: 201 },
+      ),
+    );
+
+    await expect(
+      signupBackend({
+        email: "person@example.com",
+        password: "correct-horse-battery-staple",
+      }),
+    ).resolves.toEqual({ message: "Check your email to confirm your account" });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://backend.example.com/api/v1/auth/signup");
+    expect(init?.method).toBe("POST");
   });
 });

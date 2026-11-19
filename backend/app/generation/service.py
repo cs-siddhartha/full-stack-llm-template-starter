@@ -14,7 +14,7 @@ class GenerationService(Protocol):
 
 
 class DemoGenerationService:
-    """Give local development deterministic output without provider credentials."""
+    """Provide deterministic local output with no external provider configuration."""
 
     provider = "demo"
 

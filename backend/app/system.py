@@ -3,7 +3,8 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict
 
-from app.auth import require_basic_auth
+from app.auth.dependencies import require_session
+from app.auth.service import CurrentSession
 from app.context import ApplicationContext, get_context
 from app.http import ApiError
 
@@ -51,15 +52,25 @@ def read_health(
         }
     },
 )
-def read_config(
+async def read_config(
     context: Annotated[ApplicationContext, Depends(get_context)],
-    _username: Annotated[str, Depends(require_basic_auth)],
+    _session: Annotated[CurrentSession, Depends(require_session)],
 ) -> ConfigRead:
+    cached = await context.cache.get_json("runtime-config")
+    if cached is not None:
+        return ConfigRead.model_validate(cached)
+
     service = context.generation_service
-    limiter = context.generation_limiter
-    return ConfigRead(
+    policy = context.rate_limiter.policy("generation")
+    config = ConfigRead(
         generation_provider=service.provider,
         generation_model=service.model,
-        rate_limit_requests=limiter.limit,
-        rate_limit_window_seconds=limiter.window_seconds,
+        rate_limit_requests=policy.limit,
+        rate_limit_window_seconds=policy.window_seconds,
     )
+    await context.cache.set_json(
+        "runtime-config",
+        config.model_dump(),
+        context.settings.config_cache_ttl_seconds,
+    )
+    return config

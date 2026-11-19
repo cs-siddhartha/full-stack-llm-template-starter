@@ -5,54 +5,72 @@ flowchart LR
     browser[User / Browser]
 
     subgraph frontend[Next.js frontend]
-        proxy[HTTP Basic proxy]
+        pages[Landing, sign-up, login, app, logout]
         rsc[Server Components]
-        action[Generation Server Action]
+        action[Authenticated Server Actions]
         client[Server-only API client]
 
-        proxy --> rsc
-        proxy --> action
+        pages --> rsc
+        pages --> action
         rsc --> client
         action --> client
     end
 
     subgraph backend[FastAPI backend]
         router[Versioned API router<br/>/api/v1]
+        auth[Cookie session dependency]
+        registration[Registration and email verification]
         health[Health endpoint]
-        config_auth[HTTP Basic authentication]
-        generation_auth[HTTP Basic authentication]
         config[Runtime capabilities]
         validation[Pydantic request validation]
-        limiter[Credential-scoped rate limiter]
+        decorator[Rate-limit decorator]
+        cache[Cache service]
         service[GenerationService]
         provider[Demo or production provider]
 
         router -->|GET /health| health
-        router -->|GET /config| config_auth
-        config_auth --> config
-        router -->|POST /generations| generation_auth
-        generation_auth --> validation
-        validation --> limiter
-        limiter --> service
+        router -->|Sign-up and verification| registration
+        router -->|Protected routes| auth
+        auth --> decorator
+        decorator --> config
+        decorator --> validation
+        decorator --> cache
+        validation --> service
         service --> provider
     end
 
-    browser -->|HTTPS + Basic Auth| proxy
-    client -->|Server-to-server HTTP<br/>Authorization forwarded| router
+    subgraph redis[Redis]
+        users[Users and verification tokens]
+        sessions[Opaque sessions]
+        counters[Atomic rate counters]
+        entries[Namespaced cache entries]
+    end
+
+    resend[Resend email API]
+
+    browser -->|HttpOnly session cookie| pages
+    client -->|Cookie forwarded server-side| router
+    registration --> users
+    registration -->|Confirmation email| resend
+    resend -->|Confirmation link| browser
+    auth --> sessions
+    decorator --> counters
+    cache --> entries
     provider -->|Provider-neutral response| client
 
     frontend_env[Frontend server environment]
     backend_env[Backend environment]
-    frontend_env -.-> proxy
     frontend_env -.-> client
-    backend_env -.-> config_auth
-    backend_env -.-> generation_auth
+    backend_env -.-> auth
+    backend_env -.-> decorator
+    backend_env -.-> cache
     backend_env -.-> service
 ```
 
-The browser never calls FastAPI directly. Next.js revalidates authentication
-inside protected server operations rather than relying on the proxy alone. The
-backend is therefore private and does not carry browser CORS configuration.
+Next.js owns the browser cookie and forwards it through a server-only client.
+FastAPI resolves every protected session from Redis near the endpoint. Proxy
+redirects are an optimistic user experience check and are not an authorization
+boundary.
 
 ```mermaid
 flowchart LR

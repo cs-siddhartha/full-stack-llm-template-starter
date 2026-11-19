@@ -11,11 +11,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
-    settings = Settings(
-        _env_file=None,
-        basic_auth_username="schema",
-        basic_auth_password="schema-only",
-    )
+    settings = Settings(_env_file=None)
     schema = create_app(settings=settings).openapi()
     args.output.write_text(
         f"{json.dumps(schema, indent=2, sort_keys=True)}\n",

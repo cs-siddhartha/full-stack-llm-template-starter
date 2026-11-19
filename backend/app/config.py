@@ -4,13 +4,11 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
 _PROJECT_NAME = "reusable-llm-backend"
-_LOCAL_AUTH_USERNAME = "local"
-_LOCAL_AUTH_PASSWORD = "local-development-only"
 
 
 def _project_version() -> str:
@@ -24,21 +22,33 @@ def _project_version() -> str:
         return str(project["version"])
 
 
-def _require_printable_ascii(value: str, setting_name: str) -> None:
-    """Keep credentials compatible with HTTP Basic decoders in both runtimes."""
-    if not value.isascii() or not value.isprintable():
-        raise ValueError(f"{setting_name} must contain only printable ASCII characters")
-
-
 class Settings(BaseSettings):
-    app_name: str = "Reusable LLM API"
+    app_name: str = "LLM API"
     app_version: str = Field(default_factory=_project_version)
     environment: Literal["development", "test", "production"] = "development"
     debug: bool = False
-    basic_auth_username: str = Field(min_length=1)
-    basic_auth_password: SecretStr = Field(min_length=1)
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    redis_namespace: str = Field(default="full-stack-starter", min_length=1)
+    demo_login_enabled: bool = True
+    resend_api_key: SecretStr | None = None
+    resend_from_email: str = "Starter <onboarding@resend.dev>"
+    frontend_url: str = "http://localhost:3000"
+    backend_public_url: str = "http://localhost:8000"
+    email_verification_ttl_seconds: int = Field(default=3_600, gt=0)
+    session_cookie_name: str = Field(
+        default="starter_session",
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    session_ttl_seconds: int = Field(default=86_400, gt=0)
+    login_rate_limit_requests: int = Field(default=5, gt=0)
+    login_rate_limit_window_seconds: int = Field(default=60, gt=0)
+    signup_rate_limit_requests: int = Field(default=3, gt=0)
+    signup_rate_limit_window_seconds: int = Field(default=300, gt=0)
     rate_limit_requests: int = Field(default=10, gt=0)
     rate_limit_window_seconds: int = Field(default=60, gt=0)
+    cache_flush_rate_limit_requests: int = Field(default=3, gt=0)
+    cache_flush_rate_limit_window_seconds: int = Field(default=60, gt=0)
+    config_cache_ttl_seconds: int = Field(default=30, gt=0)
     llm_model: str = "demo-v1"
 
     model_config = SettingsConfigDict(
@@ -50,35 +60,18 @@ class Settings(BaseSettings):
         hide_input_in_errors=True,
     )
 
-    @field_validator("basic_auth_username")
-    @classmethod
-    def validate_basic_auth_username(cls, value: str) -> str:
-        _require_printable_ascii(value, "BASIC_AUTH_USERNAME")
-        if ":" in value:
-            raise ValueError("BASIC_AUTH_USERNAME must not contain ':'")
-        return value
-
-    @field_validator("basic_auth_password")
-    @classmethod
-    def validate_basic_auth_password(cls, value: SecretStr) -> SecretStr:
-        _require_printable_ascii(value.get_secret_value(), "BASIC_AUTH_PASSWORD")
-        return value
-
     @model_validator(mode="after")
-    def require_production_auth_credentials(self) -> "Settings":
-        """Prevent production from starting with either documented local credential."""
-        uses_local_username = self.basic_auth_username == _LOCAL_AUTH_USERNAME
-        uses_local_password = (
-            self.basic_auth_password.get_secret_value() == _LOCAL_AUTH_PASSWORD
-        )
-        if self.environment == "production" and (
-            uses_local_username or uses_local_password
-        ):
-            raise ValueError(
-                "BASIC_AUTH_USERNAME and BASIC_AUTH_PASSWORD must be changed "
-                "for production"
-            )
+    def reject_local_credentials_in_production(self) -> "Settings":
+        if self.environment == "production":
+            if self.demo_login_enabled:
+                raise ValueError("DEMO_LOGIN_ENABLED must be false in production")
+            if self.resend_api_key is None:
+                raise ValueError("RESEND_API_KEY is required in production")
         return self
+
+    @property
+    def session_cookie_secure(self) -> bool:
+        return self.environment == "production"
 
 
 @lru_cache

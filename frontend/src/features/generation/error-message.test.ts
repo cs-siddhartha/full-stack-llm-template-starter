@@ -6,8 +6,8 @@ import { getGenerationErrorMessage } from "./error-message";
 describe("getGenerationErrorMessage", () => {
   it.each([
     [
-      new BackendRequestError("unauthorized", "rejected"),
-      "The API rejected these credentials. Check that the frontend and backend BASIC_AUTH settings match.",
+      new BackendRequestError("unauthorized", "expired", 401),
+      "Your session has expired. Sign in again.",
     ],
     [
       new BackendRequestError("http-error", "invalid", 422),

@@ -1,22 +1,18 @@
 import "server-only";
 
-import {
-  type BasicCredentials,
-  credentialsArePortable,
-} from "./basic-auth";
-
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8000";
 const DEFAULT_READ_TIMEOUT_MS = 5_000;
 const DEFAULT_GENERATION_TIMEOUT_MS = 60_000;
+const DEFAULT_SESSION_COOKIE_NAME = "starter_session";
 
 export type BackendConfig = {
   url: string;
   readTimeoutMs: number;
   generationTimeoutMs: number;
+  sessionCookieName: string;
 };
 
 let cachedBackendConfig: BackendConfig | undefined;
-let cachedCredentials: BasicCredentials | null | undefined;
 
 function readPositiveInteger(name: string, fallback: number): number {
   const value = process.env[name];
@@ -52,6 +48,11 @@ function readBackendUrl(): string {
 }
 
 export function getBackendConfig(): BackendConfig {
+  const sessionCookieName =
+    process.env.SESSION_COOKIE_NAME ?? DEFAULT_SESSION_COOKIE_NAME;
+  if (!/^[A-Za-z0-9_-]+$/.test(sessionCookieName)) {
+    throw new Error("SESSION_COOKIE_NAME contains unsupported characters.");
+  }
   cachedBackendConfig ??= {
     url: readBackendUrl(),
     readTimeoutMs: readPositiveInteger(
@@ -62,18 +63,7 @@ export function getBackendConfig(): BackendConfig {
       "BACKEND_GENERATION_TIMEOUT_MS",
       DEFAULT_GENERATION_TIMEOUT_MS,
     ),
+    sessionCookieName,
   };
   return cachedBackendConfig;
-}
-
-export function getConfiguredBasicCredentials(): BasicCredentials | null {
-  if (cachedCredentials !== undefined) {
-    return cachedCredentials;
-  }
-  const credentials = {
-    username: process.env.BASIC_AUTH_USERNAME ?? "",
-    password: process.env.BASIC_AUTH_PASSWORD ?? "",
-  };
-  cachedCredentials = credentialsArePortable(credentials) ? credentials : null;
-  return cachedCredentials;
 }

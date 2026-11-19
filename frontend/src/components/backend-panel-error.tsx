@@ -3,8 +3,8 @@ import type { BackendRequestError } from "@/lib/backend-error";
 
 const failureCopy = {
   unauthorized: {
-    label: "Credentials rejected",
-    message: "Check that the frontend and backend Basic Auth settings match.",
+    label: "Session expired",
+    message: "Sign in again to continue.",
   },
   timeout: {
     label: "Timed out",

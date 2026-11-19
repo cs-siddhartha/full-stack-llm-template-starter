@@ -10,15 +10,18 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { requireBasicAuthorization } from "@/lib/auth";
 import { getPublicConfig } from "@/lib/backend";
 import { BackendRequestError } from "@/lib/backend-error";
+import { getSessionToken } from "@/lib/session";
 
 async function BackendConfigDetails() {
   let config: Awaited<ReturnType<typeof getPublicConfig>>;
   try {
-    const authorization = await requireBasicAuthorization();
-    config = await getPublicConfig(authorization);
+    const token = await getSessionToken();
+    if (!token) {
+      throw new BackendRequestError("unauthorized", "Authentication required.");
+    }
+    config = await getPublicConfig(token);
   } catch (error) {
     if (error instanceof BackendRequestError) {
       return <BackendPanelError error={error} />;
@@ -51,7 +54,7 @@ export function BackendConfigCard() {
     <Card className="min-h-56">
       <CardHeader>
         <CardTitle>Generation provider</CardTitle>
-        <CardDescription>Safe capability metadata from FastAPI.</CardDescription>
+        <CardDescription>Runtime values from FastAPI.</CardDescription>
       </CardHeader>
       <CardContent>
         <Suspense fallback={<BackendDetailsSkeleton />}>

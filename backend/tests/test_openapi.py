@@ -2,19 +2,15 @@ import json
 from pathlib import Path
 
 from app.config import Settings
-from app.main import create_app
+from tests.support import create_test_app
 
 _OPENAPI_ARTIFACT = Path(__file__).resolve().parents[2] / "openapi.json"
 
 
 def test_openapi_artifact_matches_application() -> None:
     """Fail when backend changes have not been propagated to generated clients."""
-    settings = Settings(
-        _env_file=None,
-        basic_auth_username="schema",
-        basic_auth_password="schema-only",
-    )
-    expected_schema = create_app(settings=settings).openapi()
+    settings = Settings(_env_file=None)
+    expected_schema = create_test_app(settings).openapi()
     committed_schema = json.loads(_OPENAPI_ARTIFACT.read_text(encoding="utf-8"))
 
     assert committed_schema == expected_schema

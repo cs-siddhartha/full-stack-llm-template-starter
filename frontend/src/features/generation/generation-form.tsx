@@ -31,9 +31,9 @@ export function GenerationForm() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Prompt playground</CardTitle>
+        <CardTitle>Text generation</CardTitle>
         <CardDescription>
-          This form posts to a Next.js Server Action, which calls FastAPI privately.
+          Submissions run through a Next.js Server Action and FastAPI.
         </CardDescription>
       </CardHeader>
       <CardContent>

@@ -1,10 +1,10 @@
 "use server";
 
-import { requireBasicAuthorization } from "@/lib/auth";
 import { createGeneration } from "@/lib/backend";
 import { getGenerationErrorMessage } from "@/features/generation/error-message";
 import { parseGenerationFormData } from "@/features/generation/form-data";
 import type { GenerationActionState } from "@/features/generation/types";
+import { getSessionToken } from "@/lib/session";
 
 export async function generateText(
   _previousState: GenerationActionState,
@@ -15,21 +15,13 @@ export async function generateText(
     return { status: "error", message: parsedForm.message };
   }
 
-  let authorization: string;
-  try {
-    authorization = await requireBasicAuthorization();
-  } catch {
-    return {
-      status: "error",
-      message: "Authentication is required. Reload and sign in before generating.",
-    };
+  const token = await getSessionToken();
+  if (!token) {
+    return { status: "error", message: "Your session has expired." };
   }
 
   try {
-    const generation = await createGeneration(
-      parsedForm.request,
-      authorization,
-    );
+    const generation = await createGeneration(parsedForm.request, token);
     return { status: "success", generation };
   } catch (error) {
     return { status: "error", message: getGenerationErrorMessage(error) };

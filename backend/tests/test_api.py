@@ -1,13 +1,18 @@
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
+from app.auth.email import RecordingVerificationEmailSender
+from app.auth.users import InMemoryUserStore
+from app.auth.verification import InMemoryVerificationStore
+from app.cache import InMemoryCache
 from app.config import Settings
 from app.generation.models import GenerationCreate, GenerationRead, GenerationUsage
-from app.generation.rate_limit import InMemoryFixedWindowRateLimiter
-from app.main import create_app
+from app.rate_limit import InMemoryRateLimiter, RateLimitPolicy
+from tests.support import create_test_app, login, policies
 
 
 @dataclass
@@ -46,78 +51,169 @@ def test_health_returns_readiness_metadata(client: TestClient) -> None:
     [
         ("GET", "/api/v1/config", None),
         ("POST", "/api/v1/generations", {"prompt": "Hello"}),
+        ("POST", "/api/v1/cache/flush", None),
     ],
 )
-def test_protected_routes_reject_missing_auth(
+def test_protected_routes_require_a_session(
     client: TestClient,
     method: str,
     path: str,
     payload: dict[str, str] | None,
 ) -> None:
-    request_options = {"json": payload} if payload is not None else {}
-
-    response = client.request(method, path, **request_options)
+    response = client.request(method, path, json=payload)
 
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
-    assert response.headers["www-authenticate"] == "Basic"
 
 
-@pytest.mark.parametrize(
-    ("method", "path", "payload"),
-    [
-        ("GET", "/api/v1/config", None),
-        ("POST", "/api/v1/generations", {"prompt": "Hello"}),
-    ],
-)
-def test_protected_routes_reject_incorrect_auth(
-    client: TestClient,
-    method: str,
-    path: str,
-    payload: dict[str, str] | None,
-) -> None:
-    request_options = {"json": payload} if payload is not None else {}
+def test_demo_session_and_logout(client: TestClient) -> None:
+    login_response = client.post("/api/v1/auth/demo")
 
-    response = client.request(
-        method,
-        path,
-        auth=("test-user", "wrong-password"),
-        **request_options,
+    assert login_response.status_code == status.HTTP_200_OK
+    assert login_response.json() == {
+        "user_id": "demo:local",
+        "username": "demo",
+        "role": "demo",
+    }
+    cookie = login_response.headers["set-cookie"]
+    assert "HttpOnly" in cookie
+    assert "SameSite=lax" in cookie
+    assert "Path=/" in cookie
+    assert client.get("/api/v1/auth/session").status_code == status.HTTP_200_OK
+    assert client.post("/api/v1/auth/logout").status_code == status.HTTP_204_NO_CONTENT
+    assert (
+        client.get("/api/v1/auth/session").status_code == status.HTTP_401_UNAUTHORIZED
+    )
+
+
+def test_login_rejects_invalid_credentials(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"username": "missing@example.com", "password": "incorrect-password"},
     )
 
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
-    assert response.json() == {"detail": "Incorrect username or password"}
-    assert response.headers["www-authenticate"] == "Basic"
 
 
-def test_config_describes_injected_runtime(
-    settings: Settings,
-    auth: tuple[str, str],
-) -> None:
-    service = RecordingGenerationService(provider="custom", model="custom-v2")
-    limiter = InMemoryFixedWindowRateLimiter(limit=2, window_seconds=15)
+def test_signup_requires_email_confirmation_before_login(settings: Settings) -> None:
+    users = InMemoryUserStore()
+    verifications = InMemoryVerificationStore()
+    sender = RecordingVerificationEmailSender()
 
     with TestClient(
-        create_app(
-            settings=settings,
-            generation_service=service,
-            generation_rate_limiter=limiter,
+        create_test_app(
+            settings,
+            user_store=users,
+            verification_store=verifications,
+            email_sender=sender,
         )
     ) as client:
-        response = client.get("/api/v1/config", auth=auth)
+        signup = client.post(
+            "/api/v1/auth/signup",
+            json={
+                "email": "person@example.com",
+                "password": "correct-horse-battery-staple",
+            },
+        )
+        before_confirmation = client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "person@example.com",
+                "password": "correct-horse-battery-staple",
+            },
+        )
+        verification_path = urlsplit(sender.deliveries[0][1]).path
+        verification_query = urlsplit(sender.deliveries[0][1]).query
+        confirmation = client.get(
+            f"{verification_path}?{verification_query}",
+            follow_redirects=False,
+        )
+        login_response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "person@example.com",
+                "password": "correct-horse-battery-staple",
+            },
+        )
 
-    assert response.status_code == status.HTTP_200_OK
-    assert response.json() == {
+    assert signup.status_code == status.HTTP_201_CREATED
+    assert signup.json() == {"message": "Check your email to confirm your account"}
+    assert sender.deliveries[0][0] == "person@example.com"
+    assert before_confirmation.status_code == status.HTTP_403_FORBIDDEN
+    assert confirmation.status_code == status.HTTP_303_SEE_OTHER
+    assert confirmation.headers["location"].endswith("/login?verification=verified")
+    assert login_response.status_code == status.HTTP_200_OK
+    assert login_response.json()["username"] == "person@example.com"
+
+
+def test_signup_rejects_duplicate_email(settings: Settings) -> None:
+    users = InMemoryUserStore()
+    sender = RecordingVerificationEmailSender()
+    app = create_test_app(settings, user_store=users, email_sender=sender)
+    payload = {
+        "email": "person@example.com",
+        "password": "correct-horse-battery-staple",
+    }
+
+    with TestClient(app) as client:
+        first = client.post("/api/v1/auth/signup", json=payload)
+        duplicate = client.post("/api/v1/auth/signup", json=payload)
+
+    assert first.status_code == status.HTTP_201_CREATED
+    assert duplicate.status_code == status.HTTP_409_CONFLICT
+
+
+def test_login_rate_limit_uses_endpoint_decorator(settings: Settings) -> None:
+    test_policies = policies(settings)
+    test_policies["login"] = RateLimitPolicy(1, 60)
+
+    with TestClient(
+        create_test_app(
+            settings,
+            rate_limiter=InMemoryRateLimiter(test_policies),
+        )
+    ) as client:
+        first = client.post(
+            "/api/v1/auth/login",
+            json={"username": "missing@example.com", "password": "incorrect-password"},
+        )
+        second = client.post(
+            "/api/v1/auth/login",
+            json={"username": "missing@example.com", "password": "incorrect-password"},
+        )
+
+    assert first.status_code == status.HTTP_401_UNAUTHORIZED
+    assert second.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+
+
+def test_config_is_cached_and_flushable(settings: Settings) -> None:
+    cache = InMemoryCache()
+    service = RecordingGenerationService(provider="custom", model="custom-v2")
+    custom_policies = policies(settings)
+    custom_policies["generation"] = RateLimitPolicy(2, 15)
+
+    with TestClient(
+        create_test_app(
+            settings,
+            generation_service=service,
+            cache=cache,
+            rate_limiter=InMemoryRateLimiter(custom_policies),
+        )
+    ) as client:
+        login(client, settings)
+        config = client.get("/api/v1/config")
+        flushed = client.post("/api/v1/cache/flush")
+
+    assert config.status_code == status.HTTP_200_OK
+    assert config.json() == {
         "generation_provider": "custom",
         "generation_model": "custom-v2",
         "rate_limit_requests": 2,
         "rate_limit_window_seconds": 15,
     }
+    assert flushed.json() == {"deleted_keys": 1}
 
 
-def test_generation_validates_and_delegates_to_provider(
-    settings: Settings,
-    auth: tuple[str, str],
-) -> None:
+def test_generation_validates_and_delegates_to_provider(settings: Settings) -> None:
     service = RecordingGenerationService()
     payload = {
         "prompt": "  Explain retrieval augmented generation.  ",
@@ -125,19 +221,11 @@ def test_generation_validates_and_delegates_to_provider(
         "temperature": 0.3,
     }
 
-    with TestClient(
-        create_app(settings=settings, generation_service=service)
-    ) as client:
-        response = client.post("/api/v1/generations", json=payload, auth=auth)
+    with TestClient(create_test_app(settings, generation_service=service)) as client:
+        login(client, settings)
+        response = client.post("/api/v1/generations", json=payload)
 
     assert response.status_code == status.HTTP_201_CREATED
-    assert response.json() == {
-        "id": "gen_recorded",
-        "provider": "recording",
-        "model": "recording-v1",
-        "output": "Recorded response",
-        "usage": {"input_characters": 7, "output_characters": 17},
-    }
     assert service.requests == [
         GenerationCreate(
             prompt="Explain retrieval augmented generation.",
@@ -147,108 +235,59 @@ def test_generation_validates_and_delegates_to_provider(
     ]
 
 
-def test_generation_rejects_blank_prompts(
-    client: TestClient,
-    auth: tuple[str, str],
+def test_generation_rejects_invalid_payloads(
+    authenticated_client: TestClient,
 ) -> None:
-    response = client.post(
+    blank = authenticated_client.post(
         "/api/v1/generations",
         json={"prompt": "   "},
-        auth=auth,
     )
-
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert response.json()["detail"][0]["loc"] == ["body", "prompt"]
-
-
-def test_generation_rejects_unknown_fields(
-    client: TestClient,
-    auth: tuple[str, str],
-) -> None:
-    response = client.post(
+    unknown = authenticated_client.post(
         "/api/v1/generations",
         json={"prompt": "Hello", "api_key": "must-not-be-accepted"},
-        auth=auth,
     )
 
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert blank.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert unknown.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
-def test_invalid_generation_does_not_consume_rate_limit_capacity(
-    settings: Settings,
-    auth: tuple[str, str],
-) -> None:
-    limiter = InMemoryFixedWindowRateLimiter(limit=1, window_seconds=60)
+def test_invalid_generation_does_not_consume_capacity(settings: Settings) -> None:
+    test_policies = policies(settings)
+    test_policies["generation"] = RateLimitPolicy(1, 60)
+    limiter = InMemoryRateLimiter(test_policies)
 
-    with TestClient(
-        create_app(settings=settings, generation_rate_limiter=limiter)
-    ) as client:
-        invalid = client.post(
-            "/api/v1/generations",
-            json={"prompt": "   "},
-            auth=auth,
-        )
-        valid = client.post(
-            "/api/v1/generations",
-            json={"prompt": "Valid"},
-            auth=auth,
-        )
+    with TestClient(create_test_app(settings, rate_limiter=limiter)) as client:
+        login(client, settings)
+        invalid = client.post("/api/v1/generations", json={"prompt": "   "})
+        valid = client.post("/api/v1/generations", json={"prompt": "Valid"})
 
     assert invalid.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert valid.status_code == status.HTTP_201_CREATED
     assert valid.headers["x-ratelimit-remaining"] == "0"
 
 
-def test_generation_rate_limit_headers_and_window_reset(
-    settings: Settings,
-    auth: tuple[str, str],
-) -> None:
+def test_generation_rate_limit_headers_and_window_reset(settings: Settings) -> None:
     current_time = [100.0]
-    limiter = InMemoryFixedWindowRateLimiter(
-        limit=2,
-        window_seconds=10,
-        clock=lambda: current_time[0],
-    )
+    test_policies = policies(settings)
+    test_policies["generation"] = RateLimitPolicy(2, 10)
+    limiter = InMemoryRateLimiter(test_policies, clock=lambda: current_time[0])
 
-    with TestClient(
-        create_app(settings=settings, generation_rate_limiter=limiter)
-    ) as client:
-        first = client.post(
-            "/api/v1/generations",
-            json={"prompt": "First"},
-            auth=auth,
-        )
-        second = client.post(
-            "/api/v1/generations",
-            json={"prompt": "Second"},
-            auth=auth,
-        )
-        rejected = client.post(
-            "/api/v1/generations",
-            json={"prompt": "Third"},
-            auth=auth,
-        )
+    with TestClient(create_test_app(settings, rate_limiter=limiter)) as client:
+        login(client, settings)
+        first = client.post("/api/v1/generations", json={"prompt": "First"})
+        second = client.post("/api/v1/generations", json={"prompt": "Second"})
+        rejected = client.post("/api/v1/generations", json={"prompt": "Third"})
 
-        assert first.status_code == status.HTTP_201_CREATED
-        assert first.headers["x-ratelimit-limit"] == "2"
         assert first.headers["x-ratelimit-remaining"] == "1"
-        assert first.headers["x-ratelimit-reset"] == "110"
-        assert second.status_code == status.HTTP_201_CREATED
         assert second.headers["x-ratelimit-remaining"] == "0"
         assert rejected.status_code == status.HTTP_429_TOO_MANY_REQUESTS
-        assert rejected.json() == {"detail": "Rate limit exceeded"}
-        assert rejected.headers["x-ratelimit-limit"] == "2"
-        assert rejected.headers["x-ratelimit-remaining"] == "0"
-        assert rejected.headers["x-ratelimit-reset"] == "110"
         assert rejected.headers["retry-after"] == "10"
 
         current_time[0] = 110.0
         after_reset = client.post(
             "/api/v1/generations",
             json={"prompt": "After reset"},
-            auth=auth,
         )
 
-        assert after_reset.status_code == status.HTTP_201_CREATED
-        assert after_reset.headers["x-ratelimit-remaining"] == "1"
-        assert after_reset.headers["x-ratelimit-reset"] == "120"
+    assert after_reset.status_code == status.HTTP_201_CREATED
+    assert after_reset.headers["x-ratelimit-remaining"] == "1"

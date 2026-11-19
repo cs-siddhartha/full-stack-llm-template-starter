@@ -4,8 +4,7 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Server-first LLM Starter",
-  description: "A reusable server-first Next.js starter for LLM applications.",
+  title: "LLM application",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

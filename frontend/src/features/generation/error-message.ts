@@ -14,7 +14,7 @@ export function getGenerationErrorMessage(error: unknown): string {
   }
 
   if (error.code === "unauthorized") {
-    return "The API rejected these credentials. Check that the frontend and backend BASIC_AUTH settings match.";
+    return "Your session has expired. Sign in again.";
   }
 
   if (error.code === "http-error" && error.status === 422) {

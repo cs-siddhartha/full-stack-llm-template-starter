@@ -6,6 +6,10 @@
   ],
   "scripts": {
     "prepare": "husky",
+    "infra:up": "docker compose up -d redis",
+    "infra:down": "docker compose down",
+    "dev:backend": "uv run --directory backend uvicorn app.main:app --reload",
+    "dev:frontend": "npm --workspace frontend run dev",
     "test": "npm run test:backend && npm run check:api && npm run check:frontend",
     "test:backend": "uv run --directory backend python -m pytest",
     "export:api-schema": "uv run --directory backend python -m scripts.export_openapi ../openapi.json",

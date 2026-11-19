@@ -18,6 +18,7 @@ describe("getBackendConfig", () => {
       url: "https://api.example.com",
       readTimeoutMs: 2500,
       generationTimeoutMs: 45000,
+      sessionCookieName: "starter_session",
     });
   });
 
@@ -44,25 +45,4 @@ describe("getBackendConfig", () => {
       );
     },
   );
-});
-
-describe("getConfiguredBasicCredentials", () => {
-  it("returns valid configured credentials", async () => {
-    vi.stubEnv("BASIC_AUTH_USERNAME", "test-user");
-    vi.stubEnv("BASIC_AUTH_PASSWORD", "test-password");
-    const { getConfiguredBasicCredentials } = await import("./server-config");
-
-    expect(getConfiguredBasicCredentials()).toEqual({
-      username: "test-user",
-      password: "test-password",
-    });
-  });
-
-  it("fails closed for incompatible credentials", async () => {
-    vi.stubEnv("BASIC_AUTH_USERNAME", "user:name");
-    vi.stubEnv("BASIC_AUTH_PASSWORD", "test-password");
-    const { getConfiguredBasicCredentials } = await import("./server-config");
-
-    expect(getConfiguredBasicCredentials()).toBeNull();
-  });
 });

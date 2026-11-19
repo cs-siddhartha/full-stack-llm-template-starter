@@ -1,11 +1,13 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 
-from app.auth import require_basic_auth
+from app.auth.dependencies import require_session
+from app.auth.service import CurrentSession
 from app.context import ApplicationContext, get_context
 from app.generation.models import GenerationCreate, GenerationRead
 from app.http import ApiError
+from app.rate_limit import rate_limited
 
 router = APIRouter(prefix="/generations", tags=["generations"])
 
@@ -37,18 +39,12 @@ _RATE_LIMIT_HEADERS = {
         },
     },
 )
+@rate_limited("generation", key="session")
 async def create_generation(
-    request: GenerationCreate,
+    payload: GenerationCreate,
     response: Response,
+    http_request: Request,
     context: Annotated[ApplicationContext, Depends(get_context)],
-    username: Annotated[str, Depends(require_basic_auth)],
+    session: Annotated[CurrentSession, Depends(require_session)],
 ) -> GenerationRead:
-    rate_limit = await context.generation_limiter.consume(username)
-    if not rate_limit.allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded",
-            headers=rate_limit.as_headers(),
-        )
-    response.headers.update(rate_limit.as_headers())
-    return await context.generation_service.generate(request)
+    return await context.generation_service.generate(payload)
